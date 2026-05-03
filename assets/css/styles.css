@@ -20,7 +20,7 @@
   --serif-body:    "EB Garamond", "Palatino", "Iowan Old Style", Georgia, serif;
   --mono:          "IBM Plex Mono", "JetBrains Mono", ui-monospace, "Menlo", monospace;
 
-  --measure: 42rem;
+  --measure: 48rem;
 }
 
 /* ── reset ── */
@@ -705,6 +705,12 @@ a:hover {
   .article-body blockquote {
     margin: 2rem 0;
     padding-left: 1.2rem;
+  }
+
+  .article-body pre {
+    margin: 1.6rem 0;
+    padding: 0.95rem 1rem;
+    font-size: 0.74rem;
   }
 
   .article-foot,
