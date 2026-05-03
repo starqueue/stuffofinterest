@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ubuntu Chisel — carve away cruft to create minimal Ubuntu for containers — Stuff of Interest</title>
+  <meta name="description" content="Same signed Ubuntu binaries, ten times smaller, no shell and no package manager — and Microsoft already ships their .NET production containers using it.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,300..700,30..100,0..1;1,9..144,300..700,30..100,0..1&family=EB+Garamond:ital,wght@0,400..600;1,400..600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/css/styles.css">
+</head>
+<body>
+  <div class="page">
+
+    <header class="masthead">
+      <div class="mast-meta">
+        <span><a href="../index.html">← Stuff of Interest</a></span>
+        <span>Vol. I · № 04</span>
+      </div>
+      <nav class="mast-nav" aria-label="Primary">
+        <a href="../index.html">Index</a>
+        <a href="../about.html">Colophon</a>
+      </nav>
+    </header>
+
+    <article class="article">
+
+      <header class="article-head">
+        <p class="article-kicker">Essay № 04 · On containers</p>
+        <h1 class="article-title">Ubuntu <em>Chisel</em> — carve away cruft to create minimal Ubuntu for containers</h1>
+        <p class="article-deck">Same signed Ubuntu binaries, ten times smaller, no shell and no package manager — and Microsoft already ships their .NET production containers using it.</p>
+        <p class="article-byline">
+          <span>Andrew Stuart</span>
+          <span>3 May 2026</span>
+          <span>18 min read</span>
+        </p>
+      </header>
+
+      <div class="article-body">
+
+        <p><em><strong>Why yes, yes I do want tiny Ubuntu container images without SSH shell at all.</strong></em></p>
+
+        <p>Microsoft recommends chiselled Ubuntu for new .NET containers (<a href="https://github.com/dotnet/dotnet-docker/blob/main/documentation/ubuntu-chiseled.md">https://github.com/dotnet/dotnet-docker/blob/main/documentation/ubuntu-chiseled.md</a>), and Canonical maintains a growing catalogue of pre-built chiselled rocks for the things people actually run in production: PostgreSQL (<a href="https://github.com/canonical/postgresql-rock">https://github.com/canonical/postgresql-rock</a>), Python (<a href="https://github.com/canonical/python-rock">https://github.com/canonical/python-rock</a>), Java/JRE (<a href="https://github.com/canonical/jre-rock">https://github.com/canonical/jre-rock</a>), Node.js (<a href="https://github.com/canonical/node-rock">https://github.com/canonical/node-rock</a>), nginx (<a href="https://github.com/canonical/nginx-rock">https://github.com/canonical/nginx-rock</a>), and RabbitMQ (<a href="https://github.com/canonical/rabbitmq-rock">https://github.com/canonical/rabbitmq-rock</a>). Canonical's <code>oci-factory</code> repository (<a href="https://github.com/canonical/oci-factory">https://github.com/canonical/oci-factory</a>) provides the reusable GitHub Actions workflow that builds, tests, and publishes rocks at scale, including Trivy (<a href="https://github.com/aquasecurity/trivy">https://github.com/aquasecurity/trivy</a>) scanning and Pebble service-manager smoke tests.</p>
+
+        <p><strong>Sounds important — so what is it?</strong></p>
+
+        <p>Chisel (<a href="https://github.com/canonical/chisel">https://github.com/canonical/chisel</a>) is a Canonical project that lets you carve Ubuntu's Debian packages into named subsets — <em>slices</em> — and ship only the slices an application actually needs into a container image. The output is the same signed binaries the Ubuntu archive ships to production servers, just without the manpages, shell utilities, locale data, and the hundred other files most applications never use. <em><strong>Production images come out five to ten times smaller than the equivalent built from a normal Ubuntu base.</strong></em> CVE counts drop because the vulnerable files are no longer present. Canonical publishes chiselled rocks for PostgreSQL, RabbitMQ, JRE and Python. The tool is a single Go binary licensed under AGPL-3.0.</p>
+
+        <p>Pull a fresh <code>ubuntu:22.04</code> from Docker Hub and check the size: about 28 megabytes compressed, around 80 megabytes uncompressed. That's the <em>base</em>, before anything else is installed. For an application built as a single static Go binary, almost none of those 80 megabytes will ever be touched at runtime. The shell, apt, dpkg, the locale archive, the manpages, the hundred-odd files in <code>/usr/share/doc</code>, the readline library — all shipped, all stored in the registry, all pulled by every node in the cluster, all scanned by every CVE scanner, none of it executed.</p>
+
+        <p>This is the container-size problem, and people have been working at it for years now.</p>
+
+        <p>The most common existing answer is Alpine Linux (<a href="https://www.alpinelinux.org">https://www.alpinelinux.org</a>). Swap glibc for musl, swap GNU coreutils for busybox, and a base image that was 78MB compressed shrinks to about 3MB. The trade-off is musl/glibc compatibility. DNS resolver behaviour differs in subtle ways. Quite a few Python wheels won't install because they were built against manylinux and don't have musl variants. Go's cgo paths need rebuilding against a different libc, too.</p>
+
+        <p>A second answer is Google Distroless (<a href="https://github.com/GoogleContainerTools/distroless">https://github.com/GoogleContainerTools/distroless</a>). Take a runtime — Java, Python, Node, .NET — strip out the OS plumbing, ship only what's needed for that runtime, with no shell or package manager. The images are small and hardened, but they are Google's curated set, on Google's release cadence, supporting the runtimes Google has chosen to support. If your stack doesn't fit the curated set you fork it and maintain it yourself.</p>
+
+        <p>A third answer is <code>FROM scratch</code>: build the entire image content yourself.</p>
+
+        <p>Canonical's answer is Chisel. The approach in one sentence: instead of shipping whole Debian packages into a container image, ship pre-defined named subsets of those packages — slices — that contain only the files needed.</p>
+
+        <p>The canonical Chisel command, straight from the README:</p>
+
+<pre>chisel cut --release ubuntu-22.04 --root ./myrootfs \
+    libgcc-s1_libs libssl3_libs</pre>
+
+        <p>The <code>--release ubuntu-22.04</code> argument tells Chisel which branch of the chisel-releases repository (<a href="https://github.com/canonical/chisel-releases">https://github.com/canonical/chisel-releases</a>) to read slice definitions from. Slice definitions are versioned per Ubuntu release: there's an <code>ubuntu-22.04</code> branch, an <code>ubuntu-24.04</code> branch, an <code>ubuntu-22.10</code> branch, and so on, all in a single repository. The arguments on the end — <code>libgcc-s1_libs</code> and <code>libssl3_libs</code> — are slice names, following the convention <code>&lt;package&gt;_&lt;slice&gt;</code>, where <code>package</code> is an actual Debian package in the Ubuntu archive and <code>slice</code> is one of the named subsets the slice-definitions YAML for that package declares.</p>
+
+        <p>When that command runs, Chisel reaches out to the Ubuntu archives, downloads the actual signed <code>.deb</code> files for the requested packages and any transitive dependencies, validates the GPG signatures against the Ubuntu archive key, opens the debs, picks out only the files declared by the requested slices and their dependent slices, and writes those files into <code>myrootfs/</code>. The files are bit-identical to what <code>apt install</code> would produce — same archive, same signatures, same bytes — there are simply fewer of them.</p>
+
+        <p>A fragment of slice-definition YAML, from the project README:</p>
+
+<pre>package: mypkg
+slices:
+    bins:
+        essential:
+            - mypkg_config
+        contents:
+            /bin/mybin:
+            /bin/moved:  {copy: /bin/original}
+            /bin/linked: {symlink: /bin/mybin}
+    config:
+        contents:
+            /etc/mypkg.conf: {text: "The configuration."}
+            /etc/mypkg.d/:   {make: true}</pre>
+
+        <p>Each slice has a <code>contents:</code> block listing paths. A bare path means "take this file from the .deb verbatim". There's a handful of other attributes too: <code>make: true</code> creates a directory, <code>copy:</code> extracts a file from one location in the deb and writes it to a different location in the rootfs, <code>symlink:</code> creates a symlink, <code>text:</code> writes literal content into a new file, <code>mode:</code> sets octal permissions, <code>arch:</code> restricts a path to specific architectures (so <code>arch: amd64</code> ships the file only when chiselling an amd64 image), and <code>until: mutate</code> means the file should exist during installation but be removed afterwards once the mutation script has run.</p>
+
+        <p>A slice can also include a <code>mutate:</code> block written in Starlark (<a href="https://github.com/google/starlark-go">https://github.com/google/starlark-go</a>) — Google's Python-flavoured config language — that runs after files are extracted and can read content from one extracted file and write derived content into another. This is how Chisel handles cases where a Debian package would normally execute a maintainer script at install time. Rather than executing <code>update-alternatives</code> or a <code>postinst</code> script, the intent is expressed declaratively in Starlark and Chisel runs it.</p>
+
+        <p>The slice catalogue in chisel-releases covers the major language ecosystems: Python 3.x, Java/JRE, .NET runtime dependencies, Node, and Go libraries. Common server software is sliced — openssl, libcurl, libxml2, libsqlite, the ICU data, ca-certificates split into <code>_data</code> and the libraries that read it, the major database client libraries, and the major TLS stacks. The standard system libraries are sliced too: glibc as <code>libc6_libs</code>, libgcc, and the C++ runtime. The README documents current limitations: package names must match the Debian archive (no aliases), only Ubuntu repositories are supported, and multiple repositories cannot be combined in one Chisel release.</p>
+
+        <p>Chisel supports Ubuntu Pro (<a href="https://ubuntu.com/pro">https://ubuntu.com/pro</a>) archives. In <code>chisel.yaml</code> an archive can be declared with a <code>pro:</code> field that takes one of <code>fips</code>, <code>fips-updates</code>, <code>esm-apps</code>, or <code>esm-infra</code>, and Chisel pulls from the corresponding endpoint at esm.ubuntu.com using credentials from <code>/etc/apt/auth.conf.d/</code>. This allows building a chiselled image whose binaries come from FIPS-validated builds with ten-year security maintenance. The credentials file's default permissions are root-only, so the file must be made readable by the user running Chisel via <code>chmod</code> or <code>setfacl</code>.</p>
+
+        <h2>Building actual images</h2>
+
+        <p>Chisel cuts files into a directory. Turning that directory into a runnable container image requires wrapping it. The manual approach is a <code>FROM scratch</code> Dockerfile that does <code>COPY --from=builder /myrootfs /</code> and sets an <code>ENTRYPOINT</code>. Microsoft's official guidance for installing custom slices into chiselled .NET images, in the dotnet/dotnet-docker repository (<a href="https://github.com/dotnet/dotnet-docker">https://github.com/dotnet/dotnet-docker</a>), follows exactly this pattern: build a chisel stage, run <code>chisel cut</code> against a target directory, then <code>COPY --from=chisel /rootfs /</code> into a final scratch image. The Microsoft pattern also uses <code>chisel-wrapper</code> from the rocks-toolbox project (<a href="https://github.com/canonical/rocks-toolbox">https://github.com/canonical/rocks-toolbox</a>), a small helper that generates a <code>dpkg/status</code> file inside the rootfs so vulnerability scanners can still identify the installed packages.</p>
+
+        <p>The higher-level option is Rockcraft (<a href="https://github.com/canonical/rockcraft">https://github.com/canonical/rockcraft</a>), Canonical's tool for building OCI images on top of the same Craft Parts lifecycle that drives Snapcraft (<a href="https://snapcraft.io">https://snapcraft.io</a>) and Charmcraft (<a href="https://github.com/canonical/charmcraft">https://github.com/canonical/charmcraft</a>). The <code>rockcraft.yaml</code> syntax mirrors <code>snapcraft.yaml</code>: <code>parts</code>, <code>stage-packages</code>, <code>plugins</code>, the same five-stage pull/overlay/build/stage/prime lifecycle. The output is what Canonical calls a "rock" — an OCI-compliant image, runnable by Docker, Podman, Kubernetes, anything that speaks OCI — built with two opinionated conventions.</p>
+
+        <p>The first convention is the entrypoint. A rock's entrypoint is Pebble (<a href="https://github.com/canonical/pebble">https://github.com/canonical/pebble</a>), a Go-based service manager Canonical wrote to handle process orchestration, log aggregation, and graceful shutdown inside a container. Services are declared as a Pebble plan in the rockcraft.yaml and Pebble runs them, replacing the usual Dockerfile <code>CMD</code> and shell wrapper.</p>
+
+        <p>The second convention is that <code>stage-packages</code> accepts chisel slice names interchangeably with normal package names. This:</p>
+
+<pre>parts:
+  app:
+    plugin: nil
+    stage-packages:
+      - openssl</pre>
+
+        <p>ships the full openssl Debian package and its dependencies, while this:</p>
+
+<pre>parts:
+  app:
+    plugin: nil
+    stage-packages:
+      - openssl_bins
+      - ca-certificates_data</pre>
+
+        <p>ships only the openssl binary, the libraries it links against, and the CA certificate bundle. Setting <code>base: bare</code> at the top of the file produces an image with no Ubuntu base layer underneath at all — no <code>/bin/sh</code>, no <code>/etc</code>, no apt — and what is shipped is exactly what the slices declared. One current limitation is that a single <code>stage-packages</code> list must be all slices or all full packages, not a mix; the workaround is splitting them across parts.</p>
+
+        <p>Some concrete sizes. Canonical's walkthrough at <a href="https://ubuntu.com/blog/craft-custom-chiselled-ubuntu-distroless">https://ubuntu.com/blog/craft-custom-chiselled-ubuntu-distroless</a> builds a minimal base of <code>base-files_base</code>, <code>base-files_release-info</code>, <code>ca-certificates_data</code>, and <code>libc6_libs</code>, and lands at around 5MB. The Microsoft/Canonical .NET work, which went GA in November 2023 and ships as <code>mcr.microsoft.com/dotnet/runtime-deps:8.0-jammy-chiseled</code>, gets .NET 8 self-contained AOT applications down below 10MB; Microsoft's announcement post at <a href="https://devblogs.microsoft.com/dotnet/announcing-dotnet-chiseled-containers/">https://devblogs.microsoft.com/dotnet/announcing-dotnet-chiseled-containers/</a> documents the figures and recommends chiselled images for new .NET container deployments. Canonical reports a 51% reduction in compressed image size for the chiselled JRE versus the Eclipse Temurin Java 17 runtime. The ASP.NET eShop comparison at <a href="https://ubuntu.com/blog/benefits-chiselled-ubuntu-images-aspnet-eshop-demo">https://ubuntu.com/blog/benefits-chiselled-ubuntu-images-aspnet-eshop-demo</a> reports a roughly 20% improvement in container startup time, a 7% reduction in steady-state memory, and a 21% reduction in memory under load.</p>
+
+        <p>A real-world example of a <code>rockcraft.yaml</code> is the PostgreSQL rock (<a href="https://github.com/canonical/postgresql-rock">https://github.com/canonical/postgresql-rock</a>) — the packaging metadata Canonical uses to ship <code>ubuntu/postgres</code> as a rock. Pulling and running it:</p>
+
+<pre>docker run -it -d \
+  -e POSTGRES_PASSWORD=myS3cr3tp@ss \
+  -p 3432:5432 \
+  --volume pg-data:/var/lib/postgresql/ \
+  ubuntu/postgres:16-24.04_edge \
+  --args postgres \
+  -c max_connections=242 \
+  -c fsync=off \
+  -c shared_buffers=256MB</pre>
+
+        <p>The <code>--args postgres -c max_connections=242</code> syntax is Pebble's, not Docker's. The container's actual entrypoint is Pebble, which runs its declared <code>postgres</code> service plan with the supplied command-line arguments. Inside the rock, the postgres binaries are the same binaries from the Ubuntu <code>postgresql-16</code> Debian package — the same package <code>apt install postgresql-16</code> would put on a regular Ubuntu host. Same archive, same signature, same security update pipeline. When a libpq CVE drops, the same fix flows into the deb, the snap, the chiselled rock, and the full rock, on the Ubuntu Security cadence. Building a rock locally is three commands once rockcraft is installed:</p>
+
+<pre>git clone https://github.com/canonical/postgresql-rock.git
+cd postgresql-rock
+rockcraft pack</pre>
+
+        <p>The repository wires up <code>rockcraft test</code>, which runs spread tests against the built image — there are smoke and upgrade suites, a single suite can be targeted with <code>rockcraft test -- spread/tests/smoke</code>, and <code>rockcraft test --debug</code> opens a shell into a failed test environment. Canonical maintains similar repositories for other infrastructure components: rabbitmq-rock (<a href="https://github.com/canonical/rabbitmq-rock">https://github.com/canonical/rabbitmq-rock</a>), jre-rock (<a href="https://github.com/canonical/jre-rock">https://github.com/canonical/jre-rock</a>), python-rock (<a href="https://github.com/canonical/python-rock">https://github.com/canonical/python-rock</a>), and charmed-postgresql-rock (<a href="https://github.com/canonical/charmed-postgresql-rock">https://github.com/canonical/charmed-postgresql-rock</a>).</p>
+
+        <h2>What chiselling provides, and what it costs</h2>
+
+        <p>The size reduction is the most visible effect but it isn't the only one.</p>
+
+        <p>A properly chiselled image contains no shell, which removes the most common foothold used by lateral-movement tooling that assumes a popped container provides shell access. A chiselled image contains no package manager, which means an attacker who lands code execution cannot use <code>apt install netcat-openbsd</code> to bring in additional tooling — the tooling has to be brought in through some other channel. Neither of these is an absolute defence: a static binary can still be downloaded if <code>curl</code> is present, and the running process itself can still be abused.</p>
+
+        <p>CVE counts decrease because file counts decrease. Vulnerability scanners flag vulnerable files; if a file is not present in the image, it cannot be flagged. The vulnerability still exists upstream, but the image stops carrying the affected component, and the scanner stops reporting on a <code>bash</code> bug in an image that contains no <code>bash</code>.</p>
+
+        <p>There are real trade-offs. Only sliced packages can be installed; the catalogue covers a large set of common software but is not comprehensive across the entire Ubuntu archive, so missing slices may need to be defined and PR'd upstream. The <code>bare</code> base contains no <code>/bin/sh</code>, so applications that rely on <code>system()</code> or shell-outs require modification. The <code>docker exec -it ... bash</code> debugging workflow is unavailable; Canonical's recommended pattern is shipping a separate debug variant of the rock that contains the additional tooling.</p>
+
+        <p>The chisel binary is also usable as a general-purpose package extraction tool on any Linux host. It does not require root if it is writing into a directory the user owns. A command like <code>chisel cut --release ubuntu-22.04 --root /tmp/foo libsqlite3-0_libs</code> will retrieve a single library out of an Ubuntu package without altering the system's apt state. The same mechanism works for build sandboxes, embedded targets, cross-architecture staging directories, and inspecting the runtime contents of a package.</p>
+
+        <h2>A note on the AGPL licence</h2>
+
+        <p>Meh.</p>
+
+        <h2>So what do I actually do?</h2>
+
+        <p><strong>The five-second version.</strong> Pull a pre-built chiselled rock and run it:</p>
+
+<pre>docker run --rm -d \
+  -e POSTGRES_PASSWORD=secret \
+  -p 5432:5432 \
+  ubuntu/postgres:16-24.04_edge</pre>
+
+        <p>Done. That postgres container has no shell, no package manager, and a CVE scan against it will come up nearly empty. Same shape for <code>ubuntu/nginx</code>, <code>ubuntu/jre</code>, and the other prebuilt rocks listed at the top of the article.</p>
+
+        <p><strong>The build-your-own version.</strong> Install chisel, cut a rootfs, wrap it in a scratch image:</p>
+
+<pre>go install github.com/canonical/chisel/cmd/chisel@latest
+
+mkdir myrootfs
+chisel cut --release ubuntu-24.04 --root myrootfs/ \
+    base-files_base \
+    ca-certificates_data \
+    libc6_libs \
+    libssl3_libs
+
+cat &gt; Dockerfile &lt;&lt;'EOF'
+FROM scratch
+COPY myrootfs/ /
+COPY my-app /usr/bin/my-app
+ENTRYPOINT ["/usr/bin/my-app"]
+EOF
+
+docker build -t my-chiselled-app .
+docker run --rm my-chiselled-app</pre>
+
+        <p>That's roughly 12MB of base plus the application binary on top. Add or remove slices on the <code>chisel cut</code> line until the application's library dependencies are satisfied — <code>ldd your-binary</code> against an Ubuntu host will tell you what to look for.</p>
+
+        <p><strong>The Python Flask version.</strong> A "hello world" Flask app on a chiselled image needs a multi-stage build: one stage to install Flask via pip into a virtualenv, one stage to chisel a rootfs, and a final scratch stage that combines them.</p>
+
+<pre># app.py
+from flask import Flask
+app = Flask(__name__)
+
+@app.get("/")
+def index():
+    return "Hello from a chiselled Flask container\n"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)</pre>
+
+<pre># Dockerfile
+FROM ubuntu:24.04 AS venv
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends \
+        python3 python3-venv &amp;&amp; rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/venv &amp;&amp; \
+    /opt/venv/bin/pip install --no-cache-dir flask
+
+FROM ubuntu:24.04 AS chiseler
+ARG CHISEL=v1.4.0
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends ca-certificates curl \
+    &amp;&amp; curl -fL https://github.com/canonical/chisel/releases/download/${CHISEL}/chisel_${CHISEL}_linux_amd64.tar.gz \
+       | tar xz -C /usr/bin chisel
+RUN mkdir /rootfs &amp;&amp; chisel cut --release ubuntu-24.04 --root /rootfs \
+        base-files_base \
+        ca-certificates_data \
+        libc6_libs \
+        libssl3_libs \
+        python3.12_standard
+
+FROM scratch
+COPY --from=chiseler /rootfs /
+COPY --from=venv /opt/venv /opt/venv
+COPY app.py /app/app.py
+ENV PATH=/opt/venv/bin:$PATH
+WORKDIR /app
+EXPOSE 8080
+ENTRYPOINT ["python3", "app.py"]</pre>
+
+        <p>Build, run, hit it:</p>
+
+<pre>docker build -t flask-chiselled .
+docker run --rm -p 8080:8080 flask-chiselled
+# in another terminal:
+curl http://localhost:8080/
+# Hello from a chiselled Flask container</pre>
+
+        <p>The final image lands around 30MB. It contains a chiselled Ubuntu base (~12MB), the Python <code>_standard</code> slice (~13MB), and the Flask virtualenv (~5MB). The <code>apt</code>, <code>curl</code>, and <code>pip</code> that built it stayed in the discarded builder stages and are not in the final image — there is no shell, no package manager, and nothing to <code>docker exec ... bash</code> into.</p>
+
+        <p>For Pebble service management, a declarative project file and a multi-service deployment, see the worked scenario below.</p>
+
+        <h2>A worked scenario: Python workers, PostgreSQL, and RabbitMQ</h2>
+
+        <p>A common deployment pattern is a pool of workers consuming tasks from a message queue and persisting state to a relational database. Here, that's Python workers reading from RabbitMQ and writing to PostgreSQL. All three components can be deployed as chiselled rocks.</p>
+
+        <p>PostgreSQL is published as a chiselled rock by Canonical at canonical/postgresql-rock, image tag <code>ubuntu/postgres:16-24.04_edge</code>. RabbitMQ is published at canonical/rabbitmq-rock as a chiselled distroless-style RabbitMQ server image. Both use Pebble as their entrypoint and accept the same environment variables their conventional images do.</p>
+
+        <p>The Python worker is built locally using Rockcraft. A minimal <code>rockcraft.yaml</code>:</p>
+
+<pre>name: pyworker
+base: bare
+build-base: ubuntu@24.04
+version: "0.1"
+summary: Python worker for the job queue
+license: Apache-2.0
+
+platforms:
+  amd64:
+
+services:
+  worker:
+    override: replace
+    command: /usr/bin/python3.12 /app/worker.py
+    startup: enabled
+    on-failure: restart
+
+parts:
+  runtime:
+    plugin: nil
+    stage-packages:
+      - python3.12
+      - python3-pika
+      - python3-psycopg2
+
+  ca-certs:
+    plugin: nil
+    stage-packages:
+      - ca-certificates_data
+
+  app:
+    plugin: dump
+    source: ./src
+    organize:
+      worker.py: app/worker.py</pre>
+
+        <p>The <code>runtime</code> and <code>ca-certs</code> parts are split because a single <code>stage-packages</code> list cannot mix full Debian packages with chisel slices. Where the equivalent slice exists in the chisel-releases catalogue for the target Ubuntu branch, full package names can be replaced with slice names (e.g. <code>python3.12_core</code>) for further size reduction; full package names are used here as the conservative default.</p>
+
+        <p>The worker source goes in <code>./src/worker.py</code>:</p>
+
+<pre>import os, pika, psycopg2
+
+amqp_url = os.environ["AMQP_URL"]
+db_url   = os.environ["DATABASE_URL"]
+
+conn = psycopg2.connect(db_url)
+mq   = pika.BlockingConnection(pika.URLParameters(amqp_url))
+ch   = mq.channel()
+ch.queue_declare(queue="jobs", durable=True)
+
+def handle(ch, method, properties, body):
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO results (payload) VALUES (%s)", (body,))
+    conn.commit()
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+ch.basic_consume(queue="jobs", on_message_callback=handle)
+ch.start_consuming()</pre>
+
+        <p>Build the rock with <code>rockcraft pack</code>, which produces <code>pyworker_0.1_amd64.rock</code>. To load it into a local Docker daemon for testing:</p>
+
+<pre>sudo rockcraft.skopeo --insecure-policy copy \
+    oci-archive:pyworker_0.1_amd64.rock \
+    docker-daemon:pyworker:0.1</pre>
+
+        <p>A <code>docker-compose.yml</code> to run the three components together:</p>
+
+<pre>services:
+  postgres:
+    image: ubuntu/postgres:16-24.04_edge
+    environment:
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: jobs
+    volumes:
+      - pgdata:/var/lib/postgresql/
+
+  rabbitmq:
+    image: ubuntu/rabbitmq:3.12-24.04_edge
+    environment:
+      RABBITMQ_DEFAULT_USER: worker
+      RABBITMQ_DEFAULT_PASS: changeme
+
+  worker:
+    image: pyworker:0.1
+    environment:
+      DATABASE_URL: postgresql://postgres:changeme@postgres:5432/jobs
+      AMQP_URL: amqp://worker:changeme@rabbitmq:5672/
+    depends_on:
+      - postgres
+      - rabbitmq
+    deploy:
+      replicas: 4
+
+volumes:
+  pgdata:</pre>
+
+        <p><code>docker compose up</code> brings up all four containers. Logs are accessible through <code>docker logs &lt;container&gt;</code> or via Pebble directly with <code>docker exec &lt;container&gt; pebble logs</code>. None of the three images contain a shell, so <code>docker exec ... bash</code> is not available; if interactive debugging is required, Canonical's recommended pattern is to publish a debug variant of the rock with the additional tooling included.</p>
+
+        <p>Each container's image contains only the binaries and libraries that component needs at runtime: postgres pulls postgres binaries plus libssl and libc; rabbitmq pulls Erlang, the rabbitmq server, and required libs; the worker pulls python3.12, the AMQP and PostgreSQL client libraries, and the CA certificate bundle. Security updates for any of those components flow through the Ubuntu Security pipeline and into the next build of each rock — the same pipeline that updates the equivalent <code>apt install</code> on a conventional Ubuntu host.</p>
+
+        <hr class="fleuron">
+
+        <h2>References</h2>
+
+        <ul>
+          <li>Chisel — <a href="https://github.com/canonical/chisel">https://github.com/canonical/chisel</a></li>
+          <li>Chisel slice definitions (chisel-releases) — <a href="https://github.com/canonical/chisel-releases">https://github.com/canonical/chisel-releases</a></li>
+          <li>Rockcraft — <a href="https://github.com/canonical/rockcraft">https://github.com/canonical/rockcraft</a></li>
+          <li>Pebble — <a href="https://github.com/canonical/pebble">https://github.com/canonical/pebble</a></li>
+          <li>Snapcraft — <a href="https://snapcraft.io">https://snapcraft.io</a></li>
+          <li>Charmcraft — <a href="https://github.com/canonical/charmcraft">https://github.com/canonical/charmcraft</a></li>
+          <li>PostgreSQL rock — <a href="https://github.com/canonical/postgresql-rock">https://github.com/canonical/postgresql-rock</a></li>
+          <li>RabbitMQ rock — <a href="https://github.com/canonical/rabbitmq-rock">https://github.com/canonical/rabbitmq-rock</a></li>
+          <li>nginx rock — <a href="https://github.com/canonical/nginx-rock">https://github.com/canonical/nginx-rock</a></li>
+          <li>Node.js rock — <a href="https://github.com/canonical/node-rock">https://github.com/canonical/node-rock</a></li>
+          <li>Python rock — <a href="https://github.com/canonical/python-rock">https://github.com/canonical/python-rock</a></li>
+          <li>JRE rock — <a href="https://github.com/canonical/jre-rock">https://github.com/canonical/jre-rock</a></li>
+          <li>Charmed PostgreSQL rock — <a href="https://github.com/canonical/charmed-postgresql-rock">https://github.com/canonical/charmed-postgresql-rock</a></li>
+          <li>OCI factory — <a href="https://github.com/canonical/oci-factory">https://github.com/canonical/oci-factory</a></li>
+          <li>Rocks toolbox — <a href="https://github.com/canonical/rocks-toolbox">https://github.com/canonical/rocks-toolbox</a></li>
+          <li>Microsoft .NET chiselled containers documentation — <a href="https://github.com/dotnet/dotnet-docker/blob/main/documentation/ubuntu-chiseled.md">https://github.com/dotnet/dotnet-docker/blob/main/documentation/ubuntu-chiseled.md</a></li>
+          <li>Microsoft .NET chiselled GA announcement — <a href="https://devblogs.microsoft.com/dotnet/announcing-dotnet-chiseled-containers/">https://devblogs.microsoft.com/dotnet/announcing-dotnet-chiseled-containers/</a></li>
+          <li>Canonical chiselled distroless walkthrough — <a href="https://ubuntu.com/blog/craft-custom-chiselled-ubuntu-distroless">https://ubuntu.com/blog/craft-custom-chiselled-ubuntu-distroless</a></li>
+          <li>ASP.NET eShop comparison — <a href="https://ubuntu.com/blog/benefits-chiselled-ubuntu-images-aspnet-eshop-demo">https://ubuntu.com/blog/benefits-chiselled-ubuntu-images-aspnet-eshop-demo</a></li>
+          <li>Alpine Linux — <a href="https://www.alpinelinux.org">https://www.alpinelinux.org</a></li>
+          <li>Google Distroless — <a href="https://github.com/GoogleContainerTools/distroless">https://github.com/GoogleContainerTools/distroless</a></li>
+          <li>Starlark — <a href="https://github.com/google/starlark-go">https://github.com/google/starlark-go</a></li>
+          <li>Ubuntu Pro — <a href="https://ubuntu.com/pro">https://ubuntu.com/pro</a></li>
+          <li>Trivy — <a href="https://github.com/aquasecurity/trivy">https://github.com/aquasecurity/trivy</a></li>
+        </ul>
+
+      </div>
+
+      <footer class="article-foot">
+        <span>End · № 04</span>
+        <a href="../index.html">↩ back to the index</a>
+      </footer>
+
+      <nav class="article-nav" aria-label="Post navigation">
+        <a href="geometry-of-wandering.html" class="nav-prev">
+          <span class="nav-label">← Previous</span>
+          On the geometry of wandering thoughts
+        </a>
+        <span class="nav-next" style="opacity:.5;">
+          <span class="nav-label">Next</span>
+          To be continued…
+        </span>
+      </nav>
+
+    </article>
+
+    <footer class="colophon-foot">
+      <p>© MMXXVI · Andrew Stuart</p>
+      <p>Set in Fraunces &amp; EB Garamond</p>
+    </footer>
+
+  </div>
+</body>
+</html>

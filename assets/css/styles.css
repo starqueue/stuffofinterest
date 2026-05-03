@@ -491,6 +491,31 @@ a:hover {
   border-radius: 2px;
 }
 
+.article-body pre {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--accent);
+  padding: 1.1rem 1.3rem;
+  margin: 1.8rem -1rem;
+  overflow-x: auto;
+  color: var(--ink);
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 1px;
+}
+
+.article-body pre code {
+  font-family: inherit;
+  font-size: inherit;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+}
+
 .article-body hr,
 .fleuron {
   border: none;
