@@ -54,7 +54,7 @@
 
         <p>A second answer is Google Distroless (<a href="https://github.com/GoogleContainerTools/distroless">https://github.com/GoogleContainerTools/distroless</a>). Take a runtime — Java, Python, Node, .NET — strip out the OS plumbing, ship only what's needed for that runtime, with no shell or package manager. The images are small and hardened, but they are Google's curated set, on Google's release cadence, supporting the runtimes Google has chosen to support. If your stack doesn't fit the curated set you fork it and maintain it yourself.</p>
 
-        <p>A third answer is <code>FROM scratch</code>: build the entire image content yourself.</p>
+        <p>A third answer is <code>FROM scratch</code>: build the entire image content yourself. For adventurers with a bright lamp and sword of sharp steel.</p>
 
         <p>Canonical's answer is Chisel. The approach in one sentence: instead of shipping whole Debian packages into a container image, ship pre-defined named subsets of those packages — slices — that contain only the files needed.</p>
 
