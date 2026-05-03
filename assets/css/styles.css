@@ -20,7 +20,7 @@
   --serif-body:    "EB Garamond", "Palatino", "Iowan Old Style", Georgia, serif;
   --mono:          "IBM Plex Mono", "JetBrains Mono", ui-monospace, "Menlo", monospace;
 
-  --measure: 36rem;
+  --measure: 42rem;
 }
 
 /* ── reset ── */
